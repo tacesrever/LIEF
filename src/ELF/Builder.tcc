@@ -719,6 +719,70 @@ void Builder::build_dynamic_section(void) {
           break;
         }
 
+      // fix wrong DT_RELR
+      case DYNAMIC_TAGS::DT_RELR:
+        {
+          auto relr_addr = this->binary_->get_section(".relr.dyn").offset();
+          auto rel_addr = this->binary_->get_section(".data.rel.ro").offset();
+          size_t size = 8;
+          if (this->binary_->type() == ELF_CLASS::ELFCLASS32) {
+            // why should I add 0x2000 here?
+            rel_addr += 0x2000;
+
+            size = 4;
+          }
+          entry->value(relr_addr);
+          this->binary_->patch_address(relr_addr, rel_addr, size);
+          this->binary_->patch_address(rel_addr, rel_addr, size);
+          break;
+        }
+      
+      // https://cs.android.com/android/platform/superproject/+/master:bionic/linker/linker_reloc_iterators.h;drc=master;bpv=1;bpt=1;l=48
+      case DYNAMIC_TAGS::DT_ANDROID_RELA:
+        {
+          auto rela_ = this->binary_->get_section(".rela.dyn");
+          size_t got_addr = this->binary_->get_section(".got").offset();
+          entry->value(rela_.offset());
+          auto rela_data = rela_.content();
+          auto rela_stream = VectorStream(rela_data);
+          rela_stream.setpos(4);
+          size_t num_relocs = rela_stream.read_sleb128();
+          size_t r_offset = rela_stream.read_sleb128();
+          size_t group_size = rela_stream.read_sleb128();
+          size_t group_flags = rela_stream.read_sleb128();
+          if (group_size == num_relocs) {
+            size_t offset_pos = rela_stream.pos();
+            size_t offset = rela_stream.read_sleb128();
+            size_t offset_len = rela_stream.pos() - offset_pos;
+            auto encoded_addr = LEB128::uencode(got_addr);
+            this->binary_->patch_address(rela_.offset() + offset_pos, encoded_addr);
+          }
+          break;
+        }
+      // elf64:rela, elf32:rel
+      case DYNAMIC_TAGS::DT_ANDROID_REL:
+        {
+          auto rel_ = this->binary_->get_section(".rel.dyn");
+          // why should I add 0x2000 here?
+          size_t got_addr = this->binary_->get_section(".got").offset() + 0x2000;
+          entry->value(rel_.offset());
+          auto rel_data = rel_.content();
+          auto rel_stream = VectorStream(rel_data);
+          rel_stream.setpos(4);
+          size_t num_relocs = rel_stream.read_sleb128();
+          size_t r_offset = rel_stream.read_sleb128();
+          size_t group_size = rel_stream.read_sleb128();
+          size_t group_flags = rel_stream.read_sleb128();
+          if (group_size == num_relocs) {
+            size_t offset_pos = rel_stream.pos();
+            size_t offset = rel_stream.read_sleb128();
+            size_t offset_len = rel_stream.pos() - offset_pos;
+            auto encoded_addr = LEB128::uencode(got_addr);
+            this->binary_->patch_address(rel_.offset() + offset_pos, encoded_addr);
+          }
+          break;
+        }
+
       default:
         {
         }
